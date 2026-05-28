@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/KangVin/TeleRelayBot/internal/app"
@@ -41,11 +40,7 @@ type Limiter struct {
 	now     func() time.Time
 }
 
-func New(cfg app.Config, rawStore any) (*Limiter, error) {
-	store, ok := normalizeStore(rawStore)
-	if !ok {
-		return nil, errors.New("rate limit store does not implement ratelimit.Store")
-	}
+func New(cfg app.Config, store Store) (*Limiter, error) {
 	return NewWithClock(store, DefaultWindows(
 		cfg.RateLimitShortWindow,
 		cfg.RateLimitShortMax,
@@ -54,19 +49,6 @@ func New(cfg app.Config, rawStore any) (*Limiter, error) {
 		cfg.RateLimitHourWindow,
 		cfg.RateLimitHourMax,
 	), time.Now)
-}
-
-func normalizeStore(rawStore any) (Store, bool) {
-	if store, ok := rawStore.(Store); ok {
-		return store, true
-	}
-	value := reflect.ValueOf(rawStore)
-	if value.Kind() == reflect.Pointer && !value.IsNil() && value.Elem().Kind() == reflect.Interface {
-		if store, ok := value.Elem().Interface().(Store); ok {
-			return store, true
-		}
-	}
-	return nil, false
 }
 
 func NewWithClock(store Store, windows []Window, now func() time.Time) (*Limiter, error) {

@@ -36,8 +36,11 @@ Copy `.env.example` to `.env`, or provide the same keys through your service man
 | `GLOBAL_FORWARD_PER_SECOND` | No | `5` | Global throttle for messages forwarded to the owner. |
 | `MAX_TEXT_LENGTH` | No | `2000` | Max inbound or reply text length. |
 | `OWNER_REPLY_PREFIX` | No | | Optional prefix prepended to owner replies. |
+| `QUICK_REPLY_RECEIVED` | No | `Received. I will review this and reply if needed.` | Custom quick-reply template for "received". |
+| `QUICK_REPLY_LATER` | No | `Received. I will reply later.` | Custom quick-reply template for "reply later". |
+| `QUICK_REPLY_THANKS` | No | `Thanks for the message.` | Custom quick-reply template for "thanks". |
 
-`.env` supports `KEY=VALUE`, optional `export`, simple single or double quotes, and inline comments when preceded by a space, for example `DATABASE_PATH=./data/bot.db # local db`.
+`.env` supports `KEY=VALUE`, optional `export`, simple single or double quotes, and inline comments. Inline comments (` # text`) are only stripped from unquoted values; quoted values preserve ` #` as-is, for example `PASSWORD="pass #123"`.
 
 ## Local Run
 
@@ -104,6 +107,7 @@ WantedBy=multi-user.target
 
 ## Owner Commands
 
+- `/help`: show owner command reference.
 - `/stats`: show aggregate user/message stats.
 - `/recent [limit]`: list recent users; defaults to 10 and caps at 50.
 - `/user <telegram_id>`: show stored user details.
@@ -112,6 +116,7 @@ WantedBy=multi-user.target
 - `/mute <telegram_id> [reason]`: accept but stop forwarding a user's messages.
 - `/unmute <telegram_id>`: restore a muted user.
 - `/blocklist`: list blocked users.
+- `/audit [limit]`: show recent audit log entries; defaults to 10 and caps at 50.
 - `/reply <telegram_id> <message>`: send a bot message to a user.
 - `/cancelreply`: cancel the active button reply session.
 
@@ -122,7 +127,7 @@ Non-owner users receive only a generic unauthorized response for owner-only acti
 When a stranger sends text or enabled media in a private chat, the owner receives a formatted relay message with buttons:
 
 - `Reply`: starts a one-message reply mode for that user; the next owner text or enabled media is sent to the user.
-- `Quick reply`: opens canned replies: `Received`, `Will reply later`, and `Thanks`.
+- `Quick reply`: opens configurable canned replies (`QUICK_REPLY_*` env vars).
 - `User info`: shows the stored user profile and status.
 - `Mute` / `Unmute`: toggles forwarding while still acknowledging the user.
 - `Ban` / `Unban`: blocks or restores the user; `Ban` asks for confirmation.

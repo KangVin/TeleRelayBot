@@ -1,11 +1,9 @@
 ﻿package bot
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/KangVin/TeleRelayBot/internal/domain"
@@ -32,12 +30,14 @@ func (h *Handler) handleCallbackReply(c tele.Context) error {
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
-	mapping, err := h.store.GetMappingByID(context.Background(), data.ID)
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	mapping, err := h.store.GetMappingByID(ctx, data.ID)
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Mapping not found."})
 	}
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
-	session, err := h.store.CreateOwnerReplySession(context.Background(), domain.OwnerReplySessionCreate{
+	session, err := h.store.CreateOwnerReplySession(ctx, domain.OwnerReplySessionCreate{
 		OwnerID:          h.cfg.OwnerID,
 		TargetTelegramID: mapping.StrangerChatID,
 		MappingID:        &mapping.ID,
@@ -73,18 +73,24 @@ func (h *Handler) handleCallbackQuickSend(c tele.Context) error {
 	if err != nil || data.Payload == "" {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	mappingID := data.ID
-	template := quickReplyText(data.Payload)
-	mapping, err := h.store.GetMappingByID(context.Background(), mappingID)
+	template := h.quickReplyText(data.Payload)
+	mapping, err := h.store.GetMappingByID(ctx, mappingID)
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Mapping not found."})
 	}
-	if _, err := h.sender.SendUser(mapping.StrangerChatID, template); err != nil {
+	if _, err := h.sender.SendUser(ctx, mapping.StrangerChatID, template); err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Send failed."})
 	}
-	_ = h.store.UpdateMappingStatus(context.Background(), mappingID, domain.MessageMappingStatusReplied)
+	if err := h.store.UpdateMappingStatus(ctx, mappingID, domain.MessageMappingStatusReplied); err != nil {
+		h.log.Error("update quick reply mapping status", slog.Any("error", err), slog.Int64("mapping_id", mappingID))
+	}
 	targetID := mapping.StrangerChatID
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionQuickReply, TargetID: &targetID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionQuickReply, TargetID: &targetID}); err != nil {
+		h.log.Error("add quick reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	h.editCallbackMessage(c, fmt.Sprintf("Quick reply sent to user %d:\n%s", mapping.StrangerChatID, template))
 	return c.Respond(&tele.CallbackResponse{Text: "Quick reply sent."})
 }
@@ -94,15 +100,17 @@ func (h *Handler) handleCallbackUser(c tele.Context) error {
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id := data.ID
-	user, err := h.store.GetUser(context.Background(), id)
+	user, err := h.store.GetUser(ctx, id)
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "User not found."})
 	}
 	if err := c.Respond(); err != nil {
 		return err
 	}
-	return c.Send(formatDomainUserInfo(user))
+	return c.Send(formatDomainUserInfo(user), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 }
 
 func (h *Handler) handleCallbackMute(c tele.Context) error {
@@ -118,11 +126,15 @@ func (h *Handler) handleCallbackUnban(c tele.Context) error {
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id := data.ID
-	if err := h.store.ClearBan(context.Background(), id); err != nil {
+	if err := h.store.ClearBan(ctx, id); err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "User not found."})
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnban, TargetID: &id})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnban, TargetID: &id}); err != nil {
+		h.log.Error("add callback unban audit log", slog.Any("error", err), slog.Int64("target_id", id))
+	}
 	h.refreshOwnerMessageKeyboard(c, id, domain.UserStatusNormal)
 	return c.Respond(&tele.CallbackResponse{Text: "User unbanned."})
 }
@@ -160,8 +172,10 @@ func (h *Handler) handleCallbackIgnore(c tele.Context) error {
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id := data.ID
-	mapping, err := h.store.GetMappingByID(context.Background(), id)
+	mapping, err := h.store.GetMappingByID(ctx, id)
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Mapping not found."})
 	}
@@ -173,11 +187,13 @@ func (h *Handler) handleCallbackIgnore(c tele.Context) error {
 		}
 		return c.Respond(&tele.CallbackResponse{Text: "Already ignored."})
 	}
-	if err := h.store.UpdateMappingStatus(context.Background(), id, domain.MessageMappingStatusIgnored); err != nil {
+	if err := h.store.UpdateMappingStatus(ctx, id, domain.MessageMappingStatusIgnored); err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Ignore failed."})
 	}
 	targetID := mapping.StrangerChatID
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionIgnore, TargetID: &targetID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionIgnore, TargetID: &targetID}); err != nil {
+		h.log.Error("add ignore audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	if c.Callback().Message != nil {
 		if _, err := h.bot.EditReplyMarkup(c.Callback().Message, BuildIgnoredKeyboard(id)); err != nil && !isTelegramMessageNotModified(err) {
 			h.log.Error("set ignored keyboard", slog.Any("error", err), slog.Int64("mapping_id", id))
@@ -191,7 +207,9 @@ func (h *Handler) handleCallbackCancelReply(c tele.Context) error {
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
-	if err := h.store.DeleteOwnerReplySession(context.Background(), data.ID); err != nil {
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	if err := h.store.DeleteOwnerReplySession(ctx, data.ID); err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Reply mode is not active."})
 	}
 	h.editCallbackMessage(c, "Reply mode cancelled.")
@@ -203,8 +221,10 @@ func (h *Handler) setStatusFromCallback(c tele.Context, status domain.UserStatus
 	if err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "Invalid callback."})
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id := data.ID
-	if err := h.store.SetUserStatus(context.Background(), id, status, ""); err != nil {
+	if err := h.store.SetUserStatus(ctx, id, status, "via keyboard"); err != nil {
 		return c.Respond(&tele.CallbackResponse{Text: "User not found."})
 	}
 	var auditAction domain.AuditAction
@@ -218,7 +238,9 @@ func (h *Handler) setStatusFromCallback(c tele.Context, status domain.UserStatus
 	default:
 		auditAction = domain.AuditAction(action)
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: auditAction, TargetID: &id})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: auditAction, TargetID: &id}); err != nil {
+		h.log.Error("add status change audit log", slog.Any("error", err), slog.Int64("target_id", id), slog.String("action", action))
+	}
 	h.refreshOwnerMessageKeyboard(c, id, status)
 	return c.Respond(&tele.CallbackResponse{Text: message})
 }
@@ -228,7 +250,9 @@ func (h *Handler) refreshOwnerMessageKeyboard(c tele.Context, userID int64, stat
 	if msg == nil {
 		return
 	}
-	mapping, err := h.store.GetMappingByOwnerMessage(context.Background(), h.cfg.OwnerID, int64(msg.ID))
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	mapping, err := h.store.GetMappingByOwnerMessage(ctx, h.cfg.OwnerID, int64(msg.ID))
 	if err != nil {
 		if !errors.Is(err, domain.ErrMappingNotFound) {
 			h.log.Error("load mapping for keyboard refresh", slog.Any("error", err), slog.Int64("user_id", userID))
@@ -251,18 +275,18 @@ func (h *Handler) editCallbackMessage(c tele.Context, text string) {
 }
 
 func isTelegramMessageNotModified(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "message is not modified")
+	return errors.Is(err, tele.ErrMessageNotModified) || errors.Is(err, tele.ErrSameMessageContent)
 }
 
-func quickReplyText(key string) string {
+func (h *Handler) quickReplyText(key string) string {
 	switch key {
 	case "received":
-		return "Received. I will review this and reply if needed."
+		return h.cfg.QuickReplyReceived
 	case "later":
-		return "Received. I will reply later."
+		return h.cfg.QuickReplyLater
 	case "thanks":
-		return "Thanks for the message."
+		return h.cfg.QuickReplyThanks
 	default:
-		return "Received."
+		return h.cfg.QuickReplyReceived
 	}
 }

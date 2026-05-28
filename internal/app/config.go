@@ -50,6 +50,10 @@ type Config struct {
 	GlobalForwardPerSecond int
 	MaxTextLength          int
 	OwnerReplyPrefix       string
+
+	QuickReplyReceived string
+	QuickReplyLater    string
+	QuickReplyThanks   string
 }
 
 type getenvFunc func(string) (string, bool)
@@ -100,6 +104,10 @@ func LoadConfigFromEnv(getenv getenvFunc) (Config, error) {
 	cfg.DatabasePath = getString(getenv, "DATABASE_PATH", cfg.DatabasePath)
 	cfg.PublicBotUsername = getString(getenv, "PUBLIC_BOT_USERNAME", "")
 	cfg.OwnerReplyPrefix = getString(getenv, "OWNER_REPLY_PREFIX", "")
+
+	cfg.QuickReplyReceived = getString(getenv, "QUICK_REPLY_RECEIVED", "Received. I will review this and reply if needed.")
+	cfg.QuickReplyLater = getString(getenv, "QUICK_REPLY_LATER", "Received. I will reply later.")
+	cfg.QuickReplyThanks = getString(getenv, "QUICK_REPLY_THANKS", "Thanks for the message.")
 
 	if cfg.AllowMedia, err = getBool(getenv, "ALLOW_MEDIA", false); err != nil {
 		return Config{}, err
@@ -232,7 +240,9 @@ func loadDotEnv(path string) (map[string]string, error) {
 		if key == "" {
 			return nil, fmt.Errorf("%s:%d: empty key", path, lineNo)
 		}
-		values[key] = parseDotEnvValue(strings.TrimSpace(value))
+		rawValue := strings.TrimSpace(value)
+		quoted := len(rawValue) >= 2 && (rawValue[0] == '"' || rawValue[0] == '\'')
+		values[key] = parseDotEnvValue(rawValue, quoted)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -240,15 +250,17 @@ func loadDotEnv(path string) (map[string]string, error) {
 	return values, nil
 }
 
-func parseDotEnvValue(value string) string {
+func parseDotEnvValue(value string, quoted bool) string {
 	if len(value) >= 2 {
 		quote := value[0]
 		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
 			return value[1 : len(value)-1]
 		}
 	}
-	if idx := strings.Index(value, " #"); idx >= 0 {
-		value = value[:idx]
+	if !quoted {
+		if idx := strings.Index(value, " #"); idx >= 0 {
+			value = value[:idx]
+		}
 	}
 	return strings.TrimSpace(value)
 }

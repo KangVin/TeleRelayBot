@@ -46,6 +46,15 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.MaxTextLength != 2000 {
 		t.Fatalf("MaxTextLength = %d", cfg.MaxTextLength)
 	}
+	if cfg.QuickReplyReceived != "Received. I will review this and reply if needed." {
+		t.Fatalf("QuickReplyReceived default = %q", cfg.QuickReplyReceived)
+	}
+	if cfg.QuickReplyLater != "Received. I will reply later." {
+		t.Fatalf("QuickReplyLater default = %q", cfg.QuickReplyLater)
+	}
+	if cfg.QuickReplyThanks != "Thanks for the message." {
+		t.Fatalf("QuickReplyThanks default = %q", cfg.QuickReplyThanks)
+	}
 }
 
 func TestLoadConfigMissingBotToken(t *testing.T) {
@@ -91,6 +100,9 @@ func TestLoadConfigOverrides(t *testing.T) {
 		"GLOBAL_FORWARD_PER_SECOND":        "7",
 		"MAX_TEXT_LENGTH":                  "500",
 		"OWNER_REPLY_PREFIX":               "[owner]",
+		"QUICK_REPLY_RECEIVED":             "Got it",
+		"QUICK_REPLY_LATER":                "BRB",
+		"QUICK_REPLY_THANKS":               "Thx",
 	}))
 	if err != nil {
 		t.Fatalf("LoadConfigFromEnv() error = %v", err)
@@ -107,6 +119,9 @@ func TestLoadConfigOverrides(t *testing.T) {
 	}
 	if cfg.AutoBanDuration != time.Hour || cfg.GlobalForwardPerSecond != 7 || cfg.MaxTextLength != 500 {
 		t.Fatalf("numeric overrides not loaded: %#v", cfg)
+	}
+	if cfg.QuickReplyReceived != "Got it" || cfg.QuickReplyLater != "BRB" || cfg.QuickReplyThanks != "Thx" {
+		t.Fatalf("quick reply overrides not loaded: %#v", cfg)
 	}
 }
 

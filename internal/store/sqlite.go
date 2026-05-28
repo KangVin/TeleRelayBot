@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,10 +26,6 @@ func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	return s, nil
-}
-
-func NewSQLiteStore(path string) *SQLiteStore {
-	return &SQLiteStore{path: path}
 }
 
 func (s *SQLiteStore) Open(ctx context.Context) error {
@@ -267,7 +264,9 @@ func (s *SQLiteStore) GetActiveOwnerReplySession(ctx context.Context, ownerID in
 	if err := s.requireOpen(); err != nil {
 		return nil, err
 	}
-	_, _ = s.db.ExecContext(ctx, "DELETE FROM owner_reply_sessions WHERE owner_id = ? AND expires_at <= ?", ownerID, now.UTC())
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM owner_reply_sessions WHERE owner_id = ? AND expires_at <= ?", ownerID, now.UTC()); err != nil {
+		slog.Warn("cleanup expired reply sessions", slog.Any("error", err), slog.Int64("owner_id", ownerID))
+	}
 	session, err := scanOwnerReplySession(s.db.QueryRowContext(ctx, `
 SELECT id, owner_id, target_telegram_id, mapping_id, created_at, expires_at
 FROM owner_reply_sessions
@@ -318,6 +317,17 @@ WHERE telegram_id = ? AND event_type = ? AND created_at >= ?
 	return count, nil
 }
 
+func (s *SQLiteStore) DeleteRateEventsBefore(ctx context.Context, before time.Time) error {
+	if err := s.requireOpen(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM rate_events WHERE created_at <= ?", before.UTC())
+	if err != nil {
+		return fmt.Errorf("delete rate events: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) AddAuditLog(ctx context.Context, log domain.AuditLog) error {
 	if err := s.requireOpen(); err != nil {
 		return err
@@ -334,6 +344,23 @@ VALUES (?, ?, ?, ?, ?)
 		return fmt.Errorf("add audit log: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) GetAuditLogs(ctx context.Context, limit int) ([]domain.AuditLog, error) {
+	if err := s.requireOpen(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, actor_id, action, target_id, detail, created_at
+FROM audit_logs
+ORDER BY created_at DESC
+LIMIT ?
+`, normalizeLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("get audit logs: %w", err)
+	}
+	defer rows.Close()
+	return scanAuditLogs(rows)
 }
 
 func (s *SQLiteStore) Stats(ctx context.Context, now time.Time) (*domain.Stats, error) {
@@ -472,6 +499,34 @@ func scanUser(row interface {
 	user.CreatedAt = user.CreatedAt.UTC()
 	user.UpdatedAt = user.UpdatedAt.UTC()
 	return &user, nil
+}
+
+func scanAuditLogs(rows *sql.Rows) ([]domain.AuditLog, error) {
+	var logs []domain.AuditLog
+	for rows.Next() {
+		var log domain.AuditLog
+		var targetID sql.NullInt64
+		if err := rows.Scan(
+			&log.ID,
+			&log.ActorID,
+			&log.Action,
+			&targetID,
+			&log.Detail,
+			&log.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if targetID.Valid {
+			id := targetID.Int64
+			log.TargetID = &id
+		}
+		log.CreatedAt = log.CreatedAt.UTC()
+		logs = append(logs, log)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 func scanUsers(rows *sql.Rows) ([]domain.User, error) {

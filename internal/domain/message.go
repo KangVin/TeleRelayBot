@@ -8,7 +8,6 @@ const (
 	MessageMappingStatusOpen    MessageMappingStatus = "open"
 	MessageMappingStatusReplied MessageMappingStatus = "replied"
 	MessageMappingStatusIgnored MessageMappingStatus = "ignored"
-	MessageMappingStatusClosed  MessageMappingStatus = "closed"
 )
 
 type MessageMapping struct {
@@ -53,13 +52,6 @@ const (
 	RateEventTypeLimited RateEventType = "limited"
 	RateEventTypeAutoBan RateEventType = "auto_ban"
 )
-
-type RateEvent struct {
-	ID         int64
-	TelegramID int64
-	EventType  RateEventType
-	CreatedAt  time.Time
-}
 
 type AuditAction string
 

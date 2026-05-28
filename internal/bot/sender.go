@@ -38,10 +38,20 @@ func (s *Sender) CopyOwner(ctx context.Context, ownerID int64, msg tele.Editable
 	return s.bot.Copy(&tele.User{ID: ownerID}, msg, opts...)
 }
 
-func (s *Sender) SendUser(userID int64, text string, opts ...interface{}) (*tele.Message, error) {
+func (s *Sender) SendUser(ctx context.Context, userID int64, text string, opts ...interface{}) (*tele.Message, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.limiter.Wait(waitCtx); err != nil {
+		return nil, err
+	}
 	return s.bot.Send(&tele.User{ID: userID}, text, opts...)
 }
 
-func (s *Sender) CopyUser(userID int64, msg tele.Editable, opts ...interface{}) (*tele.Message, error) {
+func (s *Sender) CopyUser(ctx context.Context, userID int64, msg tele.Editable, opts ...interface{}) (*tele.Message, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.limiter.Wait(waitCtx); err != nil {
+		return nil, err
+	}
 	return s.bot.Copy(&tele.User{ID: userID}, msg, opts...)
 }

@@ -20,13 +20,13 @@ func TestFormatOwnerMessage(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"New message",
-		"ID: 123456789",
+		"*New message*",
+		"ID: `123456789`",
 		"Username: @example",
 		"Name: Alice Smith",
 		"Language: zh-hans",
 		"Sent At: 2026-05-11 12:00:00 UTC",
-		"Message:\nhello owner",
+		"*Message:*\nhello owner",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatted owner message missing %q:\n%s", want, got)
@@ -53,8 +53,8 @@ func TestFormatUserInfo(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"User Info",
-		"ID: 123456789",
+		"*User Info*",
+		"ID: `123456789`",
 		"Username: @example",
 		"Name: Alice Smith",
 		"Language: zh-hans",
@@ -109,7 +109,7 @@ func TestFormatOwnerMediaMessage(t *testing.T) {
 	}
 
 	got := FormatOwnerMediaMessage(user, 44, "photo", "caption text")
-	for _, want := range []string{"New media message", "ID: 123", "Type: photo", "caption text", "Media copy follows"} {
+	for _, want := range []string{"*New media message*", "ID: `123`", "Type: photo", "caption text", "Media copy follows"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("FormatOwnerMediaMessage() missing %q in:\n%s", want, got)
 		}

@@ -16,26 +16,32 @@ import (
 )
 
 type Handler struct {
-	bot    *tele.Bot
-	cfg    app.Config
-	store  *store.SQLiteStore
-	log    *slog.Logger
+	bot   *tele.Bot
+	cfg   app.Config
+	store store.Store
+	log   *slog.Logger
 	sender *Sender
 	rl     *ratelimit.Limiter
+	rootCtx context.Context
 }
 
-func New(b *tele.Bot, cfg app.Config, st *store.SQLiteStore, logger *slog.Logger) (*Handler, error) {
-	limiter, err := ratelimit.New(cfg, st)
+func New(b *tele.Bot, cfg app.Config, st store.Store, logger *slog.Logger, rootCtx context.Context) (*Handler, error) {
+	rlStore, ok := st.(ratelimit.Store)
+	if !ok {
+		return nil, errors.New("store does not implement ratelimit.Store")
+	}
+	limiter, err := ratelimit.New(cfg, rlStore)
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
-		bot:    b,
-		cfg:    cfg,
-		store:  st,
-		log:    logger,
-		sender: NewSender(b, cfg.GlobalForwardPerSecond),
-		rl:     limiter,
+		bot:     b,
+		cfg:     cfg,
+		store:   st,
+		log:     logger,
+		sender:  NewSender(b, cfg.GlobalForwardPerSecond),
+		rl:      limiter,
+		rootCtx: rootCtx,
 	}, nil
 }
 
@@ -50,6 +56,7 @@ func (h *Handler) Register() {
 	h.bot.Handle("/mute", h.ownerOnly(h.handleMuteCommand))
 	h.bot.Handle("/unmute", h.ownerOnly(h.handleUnmuteCommand))
 	h.bot.Handle("/blocklist", h.ownerOnly(h.handleBlocklist))
+	h.bot.Handle("/audit", h.ownerOnly(h.handleAudit))
 	h.bot.Handle("/reply", h.ownerOnly(h.handleReplyCommand))
 	h.bot.Handle("/cancelreply", h.ownerOnly(h.handleCancelReplyCommand))
 	h.bot.Handle(tele.OnText, h.handleText)
@@ -76,6 +83,7 @@ func (h *Handler) registerCommands() {
 		{Text: "mute", Description: "Mute a user without blocking"},
 		{Text: "unmute", Description: "Unmute a muted user"},
 		{Text: "blocklist", Description: "List blocked users"},
+		{Text: "audit", Description: "View recent audit log entries"},
 		{Text: "reply", Description: "Send a message to a user by ID"},
 		{Text: "cancelreply", Description: "Cancel active reply mode"},
 	}
@@ -86,14 +94,14 @@ func (h *Handler) registerCommands() {
 
 func (h *Handler) handleStart(c tele.Context) error {
 	if h.isOwner(c) {
-		return c.Send(ownerHelpText())
+		return c.Send(ownerHelpText(), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	}
 	return c.Send("Hello. Send a private message here and I will relay it to the owner. Please avoid sending too frequently.")
 }
 
 func (h *Handler) handleHelp(c tele.Context) error {
 	if h.isOwner(c) {
-		return c.Send(ownerHelpText())
+		return c.Send(ownerHelpText(), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	}
 	return c.Send("Send a text message in this private chat. The owner can reply through the bot.")
 }
@@ -121,7 +129,8 @@ func (h *Handler) handleText(c tele.Context) error {
 }
 
 func (h *Handler) handleStrangerText(c tele.Context) error {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	msg := c.Message()
 	user := userFromTele(c.Sender())
 	if _, err := h.store.UpsertUser(ctx, user); err != nil {
@@ -170,7 +179,7 @@ func (h *Handler) handleStrangerText(c tele.Context) error {
 		Text:         c.Text(),
 		SentAt:       time.Now().UTC(),
 	})
-	sent, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText)
+	sent, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	if err != nil {
 		h.log.Error("forward to owner", slog.Any("error", err))
 		return c.Send("Message volume is high. Please try again later.")
@@ -186,12 +195,19 @@ func (h *Handler) handleStrangerText(c tele.Context) error {
 	})
 	if err != nil {
 		h.log.Error("create mapping", slog.Any("error", err))
+		if delErr := h.bot.Delete(sent); delErr != nil {
+			h.log.Error("delete orphaned owner message", slog.Any("error", delErr))
+		}
 		return c.Send("Message could not be processed.")
 	}
 	h.attachOwnerKeyboard(ctx, sent, mapping.ID, c.Sender().ID, string(dbUser.Status))
-	_ = h.store.IncrementMessageCount(ctx, c.Sender().ID)
+	if err := h.store.IncrementMessageCount(ctx, c.Sender().ID); err != nil {
+		h.log.Error("increment message count", slog.Any("error", err), slog.Int64("telegram_id", c.Sender().ID))
+	}
 	ownerID := h.cfg.OwnerID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: c.Sender().ID, Action: domain.AuditActionForward, TargetID: &ownerID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: c.Sender().ID, Action: domain.AuditActionForward, TargetID: &ownerID}); err != nil {
+		h.log.Error("add forward audit log", slog.Any("error", err), slog.Int64("actor_id", c.Sender().ID))
+	}
 	h.log.Info("forwarded to owner", slog.Int64("telegram_id", c.Sender().ID), slog.Int("owner_message_id", sent.ID))
 	return c.Send("Message relayed. Please wait for a reply.")
 }
@@ -211,7 +227,8 @@ func (h *Handler) attachOwnerKeyboard(ctx context.Context, ownerMessage *tele.Me
 }
 
 func (h *Handler) handleOwnerReply(c tele.Context) error {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	mapping, err := h.store.GetMappingByOwnerMessage(ctx, h.cfg.OwnerID, int64(c.Message().ReplyTo.ID))
 	if err != nil {
 		if errors.Is(err, domain.ErrMappingNotFound) {
@@ -231,19 +248,24 @@ func (h *Handler) handleOwnerReply(c tele.Context) error {
 	if len(c.Text()) > h.cfg.MaxTextLength {
 		return c.Send("Reply is too long.")
 	}
-	if _, err := h.sender.SendUser(mapping.StrangerChatID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, c.Text())); err != nil {
+	if _, err := h.sender.SendUser(ctx, mapping.StrangerChatID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, c.Text())); err != nil {
 		h.log.Error("send owner reply", slog.Any("error", err))
 		return c.Send("Reply could not be sent.")
 	}
-	_ = h.store.UpdateMappingStatus(ctx, mapping.ID, domain.MessageMappingStatusReplied)
+	if err := h.store.UpdateMappingStatus(ctx, mapping.ID, domain.MessageMappingStatusReplied); err != nil {
+		h.log.Error("update mapping status", slog.Any("error", err), slog.Int64("mapping_id", mapping.ID))
+	}
 	targetID := mapping.StrangerChatID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID}); err != nil {
+		h.log.Error("add reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	h.log.Info("owner replied", slog.Int64("target_id", mapping.StrangerChatID))
 	return c.Send(fmt.Sprintf("Replied to user %d.", mapping.StrangerChatID))
 }
 
 func (h *Handler) handleOwnerReplySession(c tele.Context) (bool, error) {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	session, err := h.store.GetActiveOwnerReplySession(ctx, h.cfg.OwnerID, time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, domain.ErrReplySessionNotFound) {
@@ -268,15 +290,19 @@ func (h *Handler) handleOwnerReplySession(c tele.Context) (bool, error) {
 	if user.Status == domain.UserStatusBlocked {
 		return true, c.Send("User is blocked; reply was not sent.")
 	}
-	if _, err := h.sender.SendUser(session.TargetTelegramID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, c.Text())); err != nil {
+	if _, err := h.sender.SendUser(ctx, session.TargetTelegramID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, c.Text())); err != nil {
 		h.log.Error("send session reply", slog.Any("error", err), slog.Int64("target_id", session.TargetTelegramID))
 		return true, c.Send("Reply could not be sent.")
 	}
 	if session.MappingID != nil {
-		_ = h.store.UpdateMappingStatus(ctx, *session.MappingID, domain.MessageMappingStatusReplied)
+		if err := h.store.UpdateMappingStatus(ctx, *session.MappingID, domain.MessageMappingStatusReplied); err != nil {
+			h.log.Error("update session mapping status", slog.Any("error", err), slog.Int64("mapping_id", *session.MappingID))
+		}
 	}
 	targetID := session.TargetTelegramID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID}); err != nil {
+		h.log.Error("add session reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	h.log.Info("owner replied via session", slog.Int64("target_id", session.TargetTelegramID))
 	return true, c.Send(fmt.Sprintf("Replied to user %d.", session.TargetTelegramID))
 }
@@ -301,7 +327,8 @@ func (h *Handler) handleMedia(c tele.Context) error {
 }
 
 func (h *Handler) handleStrangerMedia(c tele.Context) error {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	msg := c.Message()
 	media := detectMedia(msg, h.cfg)
 	if media.Type == "" || !media.Allowed {
@@ -346,7 +373,7 @@ func (h *Handler) handleStrangerMedia(c tele.Context) error {
 	}
 
 	ownerText := FormatOwnerMediaMessage(dbUser, msg.ID, media.Type, media.Caption)
-	meta, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText)
+	meta, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	if err != nil {
 		h.log.Error("send media metadata", slog.Any("error", err))
 		return c.Send("Message volume is high. Please try again later.")
@@ -363,20 +390,28 @@ func (h *Handler) handleStrangerMedia(c tele.Context) error {
 		h.log.Error("create media mapping", slog.Any("error", err))
 		return c.Send("Message could not be processed.")
 	}
-	h.attachOwnerKeyboard(ctx, meta, mapping.ID, c.Sender().ID, string(dbUser.Status))
 	if _, err := h.sender.CopyOwner(ctx, h.cfg.OwnerID, msg); err != nil {
 		h.log.Error("copy media to owner", slog.Any("error", err), slog.String("media_type", media.Type))
+		if delErr := h.bot.Delete(meta); delErr != nil {
+			h.log.Error("delete orphaned media metadata", slog.Any("error", delErr))
+		}
 		return c.Send("Message could not be copied. Please try again later.")
 	}
-	_ = h.store.IncrementMessageCount(ctx, c.Sender().ID)
+	h.attachOwnerKeyboard(ctx, meta, mapping.ID, c.Sender().ID, string(dbUser.Status))
+	if err := h.store.IncrementMessageCount(ctx, c.Sender().ID); err != nil {
+		h.log.Error("increment media message count", slog.Any("error", err), slog.Int64("telegram_id", c.Sender().ID))
+	}
 	ownerID := h.cfg.OwnerID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: c.Sender().ID, Action: domain.AuditActionForward, TargetID: &ownerID, Detail: media.Type})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: c.Sender().ID, Action: domain.AuditActionForward, TargetID: &ownerID, Detail: media.Type}); err != nil {
+		h.log.Error("add media forward audit log", slog.Any("error", err), slog.Int64("actor_id", c.Sender().ID))
+	}
 	h.log.Info("forwarded media to owner", slog.Int64("telegram_id", c.Sender().ID), slog.String("media_type", media.Type), slog.Int("owner_message_id", meta.ID))
 	return c.Send("Message relayed. Please wait for a reply.")
 }
 
 func (h *Handler) handleOwnerMediaReply(c tele.Context) error {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	media := detectMedia(c.Message(), h.cfg)
 	if media.Type == "" || !media.Allowed {
 		return c.Send("This media type is not enabled.")
@@ -400,19 +435,24 @@ func (h *Handler) handleOwnerMediaReply(c tele.Context) error {
 	if user.Status == domain.UserStatusBlocked {
 		return c.Send("User is blocked; reply was not sent.")
 	}
-	if _, err := h.sender.CopyUser(mapping.StrangerChatID, c.Message()); err != nil {
+	if _, err := h.sender.CopyUser(ctx, mapping.StrangerChatID, c.Message()); err != nil {
 		h.log.Error("copy owner media reply", slog.Any("error", err), slog.String("media_type", media.Type))
 		return c.Send("Reply could not be sent.")
 	}
-	_ = h.store.UpdateMappingStatus(ctx, mapping.ID, domain.MessageMappingStatusReplied)
+	if err := h.store.UpdateMappingStatus(ctx, mapping.ID, domain.MessageMappingStatusReplied); err != nil {
+		h.log.Error("update media reply mapping status", slog.Any("error", err), slog.Int64("mapping_id", mapping.ID))
+	}
 	targetID := mapping.StrangerChatID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID, Detail: media.Type})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID, Detail: media.Type}); err != nil {
+		h.log.Error("add media reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	h.log.Info("owner replied with media", slog.Int64("target_id", mapping.StrangerChatID), slog.String("media_type", media.Type))
 	return c.Send(fmt.Sprintf("Replied to user %d.", mapping.StrangerChatID))
 }
 
 func (h *Handler) handleOwnerMediaReplySession(c tele.Context) (bool, error) {
-	ctx := context.Background()
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	media := detectMedia(c.Message(), h.cfg)
 	if media.Type == "" || !media.Allowed {
 		return true, c.Send("This media type is not enabled.")
@@ -442,15 +482,19 @@ func (h *Handler) handleOwnerMediaReplySession(c tele.Context) (bool, error) {
 	if user.Status == domain.UserStatusBlocked {
 		return true, c.Send("User is blocked; reply was not sent.")
 	}
-	if _, err := h.sender.CopyUser(session.TargetTelegramID, c.Message()); err != nil {
+	if _, err := h.sender.CopyUser(ctx, session.TargetTelegramID, c.Message()); err != nil {
 		h.log.Error("copy session media reply", slog.Any("error", err), slog.String("media_type", media.Type))
 		return true, c.Send("Reply could not be sent.")
 	}
 	if session.MappingID != nil {
-		_ = h.store.UpdateMappingStatus(ctx, *session.MappingID, domain.MessageMappingStatusReplied)
+		if err := h.store.UpdateMappingStatus(ctx, *session.MappingID, domain.MessageMappingStatusReplied); err != nil {
+			h.log.Error("update session media mapping status", slog.Any("error", err), slog.Int64("mapping_id", *session.MappingID))
+		}
 	}
 	targetID := session.TargetTelegramID
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID, Detail: media.Type})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID, Detail: media.Type}); err != nil {
+		h.log.Error("add session media reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	h.log.Info("owner replied via media session", slog.Int64("target_id", session.TargetTelegramID), slog.String("media_type", media.Type))
 	return true, c.Send(fmt.Sprintf("Replied to user %d.", session.TargetTelegramID))
 }
@@ -460,23 +504,27 @@ func (h *Handler) handleReplyCommand(c tele.Context) error {
 	if err != nil {
 		return c.Send("Usage: /reply <telegram_id> <message>")
 	}
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	targetID := cmd.UserID
 	text := cmd.Message
 	if len(text) > h.cfg.MaxTextLength {
 		return c.Send("Reply is too long.")
 	}
-	user, err := h.store.GetUser(context.Background(), targetID)
+	user, err := h.store.GetUser(ctx, targetID)
 	if err != nil {
 		return c.Send("User not found.")
 	}
 	if user.Status == domain.UserStatusBlocked {
 		return c.Send("User is blocked; reply was not sent.")
 	}
-	if _, err := h.sender.SendUser(targetID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, text)); err != nil {
+	if _, err := h.sender.SendUser(ctx, targetID, applyOwnerPrefix(h.cfg.OwnerReplyPrefix, text)); err != nil {
 		h.log.Error("send reply command", slog.Any("error", err))
 		return c.Send("Reply could not be sent.")
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionReply, TargetID: &targetID}); err != nil {
+		h.log.Error("add reply command audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+	}
 	return c.Send(fmt.Sprintf("Replied to user %d.", targetID))
 }
 
@@ -484,7 +532,9 @@ func (h *Handler) handleCancelReplyCommand(c tele.Context) error {
 	if _, err := ParseCommand(c.Text()); err != nil {
 		return c.Send("Usage: /cancelreply")
 	}
-	session, err := h.store.GetActiveOwnerReplySession(context.Background(), h.cfg.OwnerID, time.Now().UTC())
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	session, err := h.store.GetActiveOwnerReplySession(ctx, h.cfg.OwnerID, time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, domain.ErrReplySessionNotFound) {
 			return c.Send("No active reply mode.")
@@ -492,7 +542,7 @@ func (h *Handler) handleCancelReplyCommand(c tele.Context) error {
 		h.log.Error("get active reply session", slog.Any("error", err))
 		return c.Send("Reply mode could not be cancelled.")
 	}
-	if err := h.store.DeleteOwnerReplySession(context.Background(), session.ID); err != nil {
+	if err := h.store.DeleteOwnerReplySession(ctx, session.ID); err != nil {
 		h.log.Error("delete active reply session", slog.Any("error", err), slog.Int64("session_id", session.ID))
 		return c.Send("Reply mode could not be cancelled.")
 	}
@@ -500,50 +550,66 @@ func (h *Handler) handleCancelReplyCommand(c tele.Context) error {
 }
 
 func (h *Handler) handleBanCommand(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id, reason, ok := parseIDReason(c.Text())
 	if !ok {
 		return c.Send("Usage: /ban <telegram_id> [reason]")
 	}
-	if err := h.store.SetUserStatus(context.Background(), id, domain.UserStatusBlocked, trimMax(reason, 500)); err != nil {
+	if err := h.store.SetUserStatus(ctx, id, domain.UserStatusBlocked, trimMax(reason, 500)); err != nil {
 		return c.Send("User not found.")
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionBan, TargetID: &id, Detail: reason})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionBan, TargetID: &id, Detail: reason}); err != nil {
+		h.log.Error("add ban audit log", slog.Any("error", err), slog.Int64("target_id", id))
+	}
 	return c.Send(fmt.Sprintf("User %d banned.", id))
 }
 
 func (h *Handler) handleUnbanCommand(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id, _, ok := parseIDReason(c.Text())
 	if !ok {
 		return c.Send("Usage: /unban <telegram_id>")
 	}
-	if err := h.store.ClearBan(context.Background(), id); err != nil {
+	if err := h.store.ClearBan(ctx, id); err != nil {
 		return c.Send("User not found.")
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnban, TargetID: &id})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnban, TargetID: &id}); err != nil {
+		h.log.Error("add unban audit log", slog.Any("error", err), slog.Int64("target_id", id))
+	}
 	return c.Send(fmt.Sprintf("User %d unbanned.", id))
 }
 
 func (h *Handler) handleMuteCommand(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id, reason, ok := parseIDReason(c.Text())
 	if !ok {
 		return c.Send("Usage: /mute <telegram_id> [reason]")
 	}
-	if err := h.store.SetUserStatus(context.Background(), id, domain.UserStatusMuted, trimMax(reason, 500)); err != nil {
+	if err := h.store.SetUserStatus(ctx, id, domain.UserStatusMuted, trimMax(reason, 500)); err != nil {
 		return c.Send("User not found.")
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionMute, TargetID: &id, Detail: reason})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionMute, TargetID: &id, Detail: reason}); err != nil {
+		h.log.Error("add mute audit log", slog.Any("error", err), slog.Int64("target_id", id))
+	}
 	return c.Send(fmt.Sprintf("User %d muted.", id))
 }
 
 func (h *Handler) handleUnmuteCommand(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	id, _, ok := parseIDReason(c.Text())
 	if !ok {
 		return c.Send("Usage: /unmute <telegram_id>")
 	}
-	if err := h.store.SetUserStatus(context.Background(), id, domain.UserStatusNormal, ""); err != nil {
+	if err := h.store.SetUserStatus(ctx, id, domain.UserStatusNormal, ""); err != nil {
 		return c.Send("User not found.")
 	}
-	_ = h.store.AddAuditLog(context.Background(), domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnmute, TargetID: &id})
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnmute, TargetID: &id}); err != nil {
+		h.log.Error("add unmute audit log", slog.Any("error", err), slog.Int64("target_id", id))
+	}
 	return c.Send(fmt.Sprintf("User %d unmuted.", id))
 }
 
@@ -552,57 +618,87 @@ func (h *Handler) handleUserCommand(c tele.Context) error {
 	if err != nil {
 		return c.Send("Usage: /user <telegram_id>")
 	}
-	user, err := h.store.GetUser(context.Background(), cmd.UserID)
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	user, err := h.store.GetUser(ctx, cmd.UserID)
 	if err != nil {
 		return c.Send("User not found.")
 	}
-	return c.Send(formatDomainUserInfo(user))
+	return c.Send(formatDomainUserInfo(user), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 }
 
 func (h *Handler) handleStats(c tele.Context) error {
-	stats, err := h.store.Stats(context.Background(), time.Now().UTC())
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	stats, err := h.store.Stats(ctx, time.Now().UTC())
 	if err != nil {
 		h.log.Error("stats", slog.Any("error", err))
 		return c.Send("Stats unavailable.")
 	}
-	return c.Send(formatDomainStats(stats))
+	return c.Send(formatDomainStats(stats), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 }
 
 func (h *Handler) handleRecent(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
 	limit := 10
-	cmd, _ := ParseCommand(c.Text())
+	cmd, err := ParseCommand(c.Text())
+	if err != nil {
+		h.log.Debug("parse recent command", slog.Any("error", err), slog.String("text", c.Text()))
+	}
 	if cmd.Limit > 0 {
 		limit = min(cmd.Limit, 50)
 	}
-	users, err := h.store.RecentUsers(context.Background(), limit)
+	users, err := h.store.RecentUsers(ctx, limit)
 	if err != nil {
 		return c.Send("Recent users unavailable.")
 	}
-	return c.Send(FormatUserList("Recent users", users))
+	return c.Send(FormatUserList("Recent users", users), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 }
 
 func (h *Handler) handleBlocklist(c tele.Context) error {
-	users, err := h.store.BlockedUsers(context.Background(), 50)
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	users, err := h.store.BlockedUsers(ctx, 50)
 	if err != nil {
 		return c.Send("Blocklist unavailable.")
 	}
-	return c.Send(FormatUserList("Blocked users", users))
+	return c.Send(FormatUserList("Blocked users", users), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+}
+
+func (h *Handler) handleAudit(c tele.Context) error {
+	ctx, cancel := h.requestContext()
+	defer cancel()
+	limit := 10
+	cmd, err := ParseCommand(c.Text())
+	if err != nil {
+		h.log.Debug("parse audit command", slog.Any("error", err), slog.String("text", c.Text()))
+	}
+	if cmd.Limit > 0 {
+		limit = min(cmd.Limit, 50)
+	}
+	logs, err := h.store.GetAuditLogs(ctx, limit)
+	if err != nil {
+		return c.Send("Audit logs unavailable.")
+	}
+	return c.Send(FormatAuditLogs(logs), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 }
 
 func ownerHelpText() string {
 	return strings.Join([]string{
-		"Owner panel",
+		"*Owner panel*",
 		"",
-		"/stats",
-		"/recent [limit]",
-		"/user <telegram_id>",
-		"/ban <telegram_id> [reason]",
-		"/unban <telegram_id>",
-		"/mute <telegram_id> [reason]",
-		"/unmute <telegram_id>",
-		"/blocklist",
-		"/reply <telegram_id> <message>",
-		"/cancelreply",
+		"`/stats`",
+		"`/recent [limit]`",
+		"`/user <telegram_id>`",
+		"`/ban <telegram_id> [reason]`",
+		"`/unban <telegram_id>`",
+		"`/mute <telegram_id> [reason]`",
+		"`/unmute <telegram_id>`",
+		"`/blocklist`",
+		"`/audit [limit]`",
+		"`/reply <telegram_id> <message>`",
+		"`/cancelreply`",
 		"",
 		"Reply directly to a relayed message to answer that user.",
 	}, "\n")
@@ -636,6 +732,10 @@ func (h *Handler) refreshExpiredTemporaryBan(ctx context.Context, user *domain.U
 	return nil
 }
 
+func (h *Handler) requestContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(h.rootCtx, 30*time.Second)
+}
+
 func (h *Handler) autoBanAfterLimit(ctx context.Context, telegramID int64) error {
 	user, err := h.store.GetUser(ctx, telegramID)
 	if err != nil {
@@ -653,13 +753,17 @@ func (h *Handler) autoBanAfterLimit(ctx context.Context, telegramID int64) error
 	if err := h.store.SetUserBannedUntil(ctx, telegramID, until, reason); err != nil {
 		return err
 	}
-	_ = h.store.AddRateEvent(ctx, telegramID, domain.RateEventTypeAutoBan)
-	_ = h.store.AddAuditLog(ctx, domain.AuditLog{
+	if err := h.store.AddRateEvent(ctx, telegramID, domain.RateEventTypeAutoBan); err != nil {
+		h.log.Error("add auto-ban rate event", slog.Any("error", err), slog.Int64("telegram_id", telegramID))
+	}
+	if err := h.store.AddAuditLog(ctx, domain.AuditLog{
 		ActorID:  h.cfg.OwnerID,
 		Action:   domain.AuditActionAutoBan,
 		TargetID: &telegramID,
 		Detail:   reason,
-	})
+	}); err != nil {
+		h.log.Error("add auto-ban audit log", slog.Any("error", err), slog.Int64("telegram_id", telegramID))
+	}
 	h.log.Info("auto banned user", slog.Int64("telegram_id", telegramID), slog.Time("banned_until", until))
 	return nil
 }

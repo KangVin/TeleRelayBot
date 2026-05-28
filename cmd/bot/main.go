@@ -54,7 +54,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	relay, err := tgbot.New(b, cfg, st, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	relay, err := tgbot.New(b, cfg, st, logger, ctx)
 	if err != nil {
 		return err
 	}
@@ -64,10 +67,29 @@ func run(logger *slog.Logger) error {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := st.DeleteRateEventsBefore(cleanupCtx, time.Now().UTC().Add(-7*24*time.Hour)); err != nil {
+				logger.Error("cleanup rate events", slog.Any("error", err))
+			}
+			cleanupCancel()
+			select {
+			case <-ticker.C:
+			case <-stop:
+				return
+			}
+		}
+	}()
+
 	go b.Start()
 	<-stop
 	logger.Info("bot stopping")
 	b.Stop()
+	cancel()
 
 	return nil
 }

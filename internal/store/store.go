@@ -29,8 +29,10 @@ type Store interface {
 	DeleteOwnerReplySession(ctx context.Context, id int64) error
 
 	AddRateEvent(ctx context.Context, telegramID int64, eventType domain.RateEventType) error
+	DeleteRateEventsBefore(ctx context.Context, before time.Time) error
 	CountRateEventsSince(ctx context.Context, telegramID int64, eventType domain.RateEventType, since time.Time) (int64, error)
 	AddAuditLog(ctx context.Context, log domain.AuditLog) error
+	GetAuditLogs(ctx context.Context, limit int) ([]domain.AuditLog, error)
 	Stats(ctx context.Context, now time.Time) (*domain.Stats, error)
 	RecentUsers(ctx context.Context, limit int) ([]domain.User, error)
 	BlockedUsers(ctx context.Context, limit int) ([]domain.User, error)
