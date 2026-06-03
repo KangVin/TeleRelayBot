@@ -1,0 +1,124 @@
+name: Release Binaries
+
+on:
+  push:
+    branches:
+      - master
+      - "feat/**"
+      - "fix/**"
+      - "ci/**"
+      - "chore/**"
+      - "refactor/**"
+      - "test/**"
+  pull_request:
+    branches:
+      - master
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: telegram-relay-bot-linux-amd64
+            binary: telegram-relay-bot
+          - goos: linux
+            goarch: arm64
+            artifact: telegram-relay-bot-linux-arm64
+            binary: telegram-relay-bot
+          - goos: darwin
+            goarch: amd64
+            artifact: telegram-relay-bot-darwin-amd64
+            binary: telegram-relay-bot
+          - goos: darwin
+            goarch: arm64
+            artifact: telegram-relay-bot-darwin-arm64
+            binary: telegram-relay-bot
+          - goos: windows
+            goarch: amd64
+            artifact: telegram-relay-bot-windows-amd64
+            binary: telegram-relay-bot.exe
+          - goos: windows
+            goarch: arm64
+            artifact: telegram-relay-bot-windows-arm64
+            binary: telegram-relay-bot.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set package version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          package="telegram-relay-bot-${{ steps.version.outputs.value }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "dist/${package}"
+          go build -trimpath -ldflags="-s -w" -o "dist/${package}/${{ matrix.binary }}" ./cmd/bot
+          echo "${package}" > "dist/package-name.txt"
+
+      - name: Package
+        shell: bash
+        run: |
+          package="$(cat dist/package-name.txt)"
+          cd dist
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            zip -r "${package}.zip" "${package}"
+          else
+            tar -czf "${package}.tar.gz" "${package}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/telegram-relay-bot-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            dist/telegram-relay-bot-*-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/telegram-relay-bot-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            dist/telegram-relay-bot-*-${{ matrix.goos }}-${{ matrix.goarch }}.zip
