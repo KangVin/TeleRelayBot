@@ -1,0 +1,14 @@
+services:
+  bot:
+    image: ${TELE_RELAY_BOT_IMAGE:-ghcr.io/kangvin/telerelaybot:latest}
+    container_name: telegram-relay-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /app/data/bot.db
+    volumes:
+      - telegram-relay-bot-data:/app/data
+
+volumes:
+  telegram-relay-bot-data:
