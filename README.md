@@ -56,6 +56,23 @@ go build -o telegram-relay-bot ./cmd/bot
 go test ./...
 ```
 
+## Release Binaries
+
+GitHub Actions builds executable packages for Linux, macOS, and Windows on `amd64` and `arm64`.
+
+Pushes to `master`, `feat/**`, `fix/**`, `ci/**`, `chore/**`, `refactor/**`, and `test/**`, pull requests to `master`, and manual workflow runs build and upload GitHub Actions artifacts for verification. Publishing a GitHub Release also uploads the same packages to the release assets.
+
+Release asset names include the software name, release version, OS, and architecture:
+
+```text
+telegram-relay-bot-v1.0.0-linux-amd64.tar.gz
+telegram-relay-bot-v1.0.0-linux-arm64.tar.gz
+telegram-relay-bot-v1.0.0-darwin-amd64.tar.gz
+telegram-relay-bot-v1.0.0-darwin-arm64.tar.gz
+telegram-relay-bot-v1.0.0-windows-amd64.zip
+telegram-relay-bot-v1.0.0-windows-arm64.zip
+```
+
 ## Docker
 
 The Dockerfile is a production multi-stage build. It builds a static Linux binary with `CGO_ENABLED=0`, which is compatible with the pure-Go `modernc.org/sqlite` driver used by this project. Runtime state is stored in `/app/data`; mount it or you will lose the SQLite database when the container is replaced.
