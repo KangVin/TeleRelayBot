@@ -60,6 +60,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
 
       - name: Build and optionally push
         uses: docker/build-push-action@v7

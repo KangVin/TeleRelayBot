@@ -60,25 +60,45 @@ go test ./...
 
 The Dockerfile is a production multi-stage build. It builds a static Linux binary with `CGO_ENABLED=0`, which is compatible with the pure-Go `modernc.org/sqlite` driver used by this project. Runtime state is stored in `/app/data`; mount it or you will lose the SQLite database when the container is replaced.
 
+Release images are published to GitHub Container Registry under the `KangVin` GitHub owner when a GitHub Release is published. Docker image references must be lowercase, so use `ghcr.io/kangvin/telerelaybot`. Images are tagged as both `latest` and the release version, for example `ghcr.io/kangvin/telerelaybot:v1.0.0`.
+
 ```bash
-docker build -t telegram-relay-bot .
+IMAGE=ghcr.io/kangvin/telerelaybot:latest
+docker pull "$IMAGE"
+
 docker run -d --name telegram-relay-bot \
   --restart unless-stopped \
   --env-file .env \
   -e DATABASE_PATH=/app/data/bot.db \
   -v telegram-relay-bot-data:/app/data \
-  telegram-relay-bot
+  "$IMAGE"
 ```
+
+Using Docker Compose:
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+The included `compose.yml` uses `ghcr.io/kangvin/telerelaybot:latest` by default, stores runtime state in a named volume, and sets `DATABASE_PATH=/app/data/bot.db` inside the container. To pin a specific release, run `TELE_RELAY_BOT_IMAGE=ghcr.io/kangvin/telerelaybot:v1.0.0 docker compose up -d`.
 
 Using a host directory instead:
 
 ```bash
+IMAGE=ghcr.io/kangvin/telerelaybot:latest
 mkdir -p data
 docker run -d --name telegram-relay-bot \
   --env-file .env \
   -e DATABASE_PATH=/app/data/bot.db \
   -v "$PWD/data:/app/data" \
-  telegram-relay-bot
+  "$IMAGE"
+```
+
+To build the image locally instead of using GHCR:
+
+```bash
+docker build -t telegram-relay-bot .
 ```
 
 ## systemd
