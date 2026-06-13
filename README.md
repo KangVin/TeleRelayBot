@@ -35,6 +35,7 @@ Copy `.env.example` to `.env`, or provide the same keys through your service man
 | `AUTO_BAN_DURATION_MINUTES` | No | `1440` | Temporary auto-ban duration. |
 | `GLOBAL_FORWARD_PER_SECOND` | No | `5` | Global throttle for messages forwarded to the owner. |
 | `MAX_TEXT_LENGTH` | No | `2000` | Max inbound or reply text length. |
+| `RATE_EVENT_RETENTION_DAYS` | No | `7` | Days to keep rate events before cleanup. |
 | `OWNER_REPLY_PREFIX` | No | | Optional prefix prepended to owner replies. |
 | `QUICK_REPLY_RECEIVED` | No | `Received. I will review this and reply if needed.` | Custom quick-reply template for "received". |
 | `QUICK_REPLY_LATER` | No | `Received. I will reply later.` | Custom quick-reply template for "reply later". |
