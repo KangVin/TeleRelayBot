@@ -73,7 +73,7 @@ func run(logger *slog.Logger) error {
 		defer ticker.Stop()
 		for {
 			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 30*time.Second)
-			if err := st.DeleteRateEventsBefore(cleanupCtx, time.Now().UTC().Add(-7*24*time.Hour)); err != nil {
+			if err := st.DeleteRateEventsBefore(cleanupCtx, time.Now().UTC().Add(-time.Duration(cfg.RateEventRetentionDays)*24*time.Hour)); err != nil {
 				logger.Error("cleanup rate events", slog.Any("error", err))
 			}
 			cleanupCancel()

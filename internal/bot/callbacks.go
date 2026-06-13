@@ -44,7 +44,7 @@ func (h *Handler) handleCallbackReply(c tele.Context) error {
 		ExpiresAt:        expiresAt,
 	})
 	if err != nil {
-		h.log.Error("create owner reply session", slog.Any("error", err))
+		h.logWith(ctx).Error("create owner reply session", slog.Any("error", err))
 		return c.Respond(&tele.CallbackResponse{Text: "Reply mode failed."})
 	}
 	if err := c.Respond(); err != nil {
@@ -85,11 +85,11 @@ func (h *Handler) handleCallbackQuickSend(c tele.Context) error {
 		return c.Respond(&tele.CallbackResponse{Text: "Send failed."})
 	}
 	if err := h.store.UpdateMappingStatus(ctx, mappingID, domain.MessageMappingStatusReplied); err != nil {
-		h.log.Error("update quick reply mapping status", slog.Any("error", err), slog.Int64("mapping_id", mappingID))
+		h.logWith(ctx).Error("update quick reply mapping status", slog.Any("error", err), slog.Int64("mapping_id", mappingID))
 	}
 	targetID := mapping.StrangerChatID
 	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionQuickReply, TargetID: &targetID}); err != nil {
-		h.log.Error("add quick reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+		h.logWith(ctx).Error("add quick reply audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
 	}
 	h.editCallbackMessage(c, fmt.Sprintf("Quick reply sent to user %d:\n%s", mapping.StrangerChatID, template))
 	return c.Respond(&tele.CallbackResponse{Text: "Quick reply sent."})
@@ -133,7 +133,7 @@ func (h *Handler) handleCallbackUnban(c tele.Context) error {
 		return c.Respond(&tele.CallbackResponse{Text: "User not found."})
 	}
 	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionUnban, TargetID: &id}); err != nil {
-		h.log.Error("add callback unban audit log", slog.Any("error", err), slog.Int64("target_id", id))
+		h.logWith(ctx).Error("add callback unban audit log", slog.Any("error", err), slog.Int64("target_id", id))
 	}
 	h.refreshOwnerMessageKeyboard(c, id, domain.UserStatusNormal)
 	return c.Respond(&tele.CallbackResponse{Text: "User unbanned."})
@@ -181,8 +181,8 @@ func (h *Handler) handleCallbackIgnore(c tele.Context) error {
 	}
 	if mapping.Status == domain.MessageMappingStatusIgnored {
 		if c.Callback().Message != nil {
-			if _, err := h.bot.EditReplyMarkup(c.Callback().Message, BuildIgnoredKeyboard(id)); err != nil && !isTelegramMessageNotModified(err) {
-				h.log.Error("refresh ignored keyboard", slog.Any("error", err), slog.Int64("mapping_id", id))
+			if _, err := h.api.EditReplyMarkup(c.Callback().Message, BuildIgnoredKeyboard(id)); err != nil && !isTelegramMessageNotModified(err) {
+				h.logWith(ctx).Error("refresh ignored keyboard", slog.Any("error", err), slog.Int64("mapping_id", id))
 			}
 		}
 		return c.Respond(&tele.CallbackResponse{Text: "Already ignored."})
@@ -192,11 +192,11 @@ func (h *Handler) handleCallbackIgnore(c tele.Context) error {
 	}
 	targetID := mapping.StrangerChatID
 	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: domain.AuditActionIgnore, TargetID: &targetID}); err != nil {
-		h.log.Error("add ignore audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
+		h.logWith(ctx).Error("add ignore audit log", slog.Any("error", err), slog.Int64("target_id", targetID))
 	}
 	if c.Callback().Message != nil {
-		if _, err := h.bot.EditReplyMarkup(c.Callback().Message, BuildIgnoredKeyboard(id)); err != nil && !isTelegramMessageNotModified(err) {
-			h.log.Error("set ignored keyboard", slog.Any("error", err), slog.Int64("mapping_id", id))
+		if _, err := h.api.EditReplyMarkup(c.Callback().Message, BuildIgnoredKeyboard(id)); err != nil && !isTelegramMessageNotModified(err) {
+			h.logWith(ctx).Error("set ignored keyboard", slog.Any("error", err), slog.Int64("mapping_id", id))
 		}
 	}
 	return c.Respond(&tele.CallbackResponse{Text: "Ignored."})
@@ -239,7 +239,7 @@ func (h *Handler) setStatusFromCallback(c tele.Context, status domain.UserStatus
 		auditAction = domain.AuditAction(action)
 	}
 	if err := h.store.AddAuditLog(ctx, domain.AuditLog{ActorID: h.cfg.OwnerID, Action: auditAction, TargetID: &id}); err != nil {
-		h.log.Error("add status change audit log", slog.Any("error", err), slog.Int64("target_id", id), slog.String("action", action))
+		h.logWith(ctx).Error("add status change audit log", slog.Any("error", err), slog.Int64("target_id", id), slog.String("action", action))
 	}
 	h.refreshOwnerMessageKeyboard(c, id, status)
 	return c.Respond(&tele.CallbackResponse{Text: message})
@@ -255,12 +255,12 @@ func (h *Handler) refreshOwnerMessageKeyboard(c tele.Context, userID int64, stat
 	mapping, err := h.store.GetMappingByOwnerMessage(ctx, h.cfg.OwnerID, int64(msg.ID))
 	if err != nil {
 		if !errors.Is(err, domain.ErrMappingNotFound) {
-			h.log.Error("load mapping for keyboard refresh", slog.Any("error", err), slog.Int64("user_id", userID))
+			h.logWith(ctx).Error("load mapping for keyboard refresh", slog.Any("error", err), slog.Int64("user_id", userID))
 		}
 		return
 	}
-	if _, err := h.bot.EditReplyMarkup(msg, BuildOwnerMessageKeyboard(mapping.ID, userID, string(status))); err != nil && !isTelegramMessageNotModified(err) {
-		h.log.Error("refresh owner message keyboard", slog.Any("error", err), slog.Int64("mapping_id", mapping.ID), slog.Int64("user_id", userID))
+	if _, err := h.api.EditReplyMarkup(msg, BuildOwnerMessageKeyboard(mapping.ID, userID, string(status))); err != nil && !isTelegramMessageNotModified(err) {
+		h.logWith(ctx).Error("refresh owner message keyboard", slog.Any("error", err), slog.Int64("mapping_id", mapping.ID), slog.Int64("user_id", userID))
 	}
 }
 
@@ -269,7 +269,7 @@ func (h *Handler) editCallbackMessage(c tele.Context, text string) {
 	if msg == nil {
 		return
 	}
-	if _, err := h.bot.Edit(msg, text); err != nil && !isTelegramMessageNotModified(err) {
+	if _, err := h.api.Edit(msg, text); err != nil && !isTelegramMessageNotModified(err) {
 		h.log.Error("edit callback message", slog.Any("error", err), slog.Int("message_id", msg.ID))
 	}
 }

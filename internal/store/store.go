@@ -8,7 +8,6 @@ import (
 )
 
 type Store interface {
-	Open(ctx context.Context) error
 	Close() error
 	Migrate(ctx context.Context) error
 

@@ -9,11 +9,11 @@ import (
 )
 
 type Sender struct {
-	bot     *tele.Bot
+	bot     tele.API
 	limiter *rate.Limiter
 }
 
-func NewSender(b *tele.Bot, perSecond int) *Sender {
+func NewSender(b tele.API, perSecond int) *Sender {
 	if perSecond <= 0 {
 		perSecond = 5
 	}

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/KangVin/TeleRelayBot/internal/envparser"
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -137,7 +139,7 @@ export MAX_TEXT_LENGTH=1500
 		t.Fatal(err)
 	}
 
-	values, err := loadDotEnv(path)
+	values, err := envparser.LoadDotEnv(path)
 	if err != nil {
 		t.Fatalf("loadDotEnv() error = %v", err)
 	}

@@ -1,13 +1,14 @@
 ﻿package app
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/KangVin/TeleRelayBot/internal/envparser"
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 	defaultAutoBanDurationMinutes       = 1440
 	defaultGlobalForwardPerSecond       = 5
 	defaultMaxTextLength                = 2000
+	defaultRateEventRetentionDays       = 7
 )
 
 type Config struct {
@@ -49,7 +51,8 @@ type Config struct {
 	AutoBanDuration        time.Duration
 	GlobalForwardPerSecond int
 	MaxTextLength          int
-	OwnerReplyPrefix       string
+	OwnerReplyPrefix           string
+	RateEventRetentionDays     int
 
 	QuickReplyReceived string
 	QuickReplyLater    string
@@ -59,7 +62,7 @@ type Config struct {
 type getenvFunc func(string) (string, bool)
 
 func LoadConfig() (Config, error) {
-	fileEnv, err := loadDotEnv(".env")
+	fileEnv, err := envparser.LoadDotEnv(".env")
 	if err != nil {
 		return Config{}, err
 	}
@@ -161,6 +164,9 @@ func LoadConfigFromEnv(getenv getenvFunc) (Config, error) {
 	if cfg.MaxTextLength, err = getPositiveInt(getenv, "MAX_TEXT_LENGTH", defaultMaxTextLength); err != nil {
 		return Config{}, err
 	}
+	if cfg.RateEventRetentionDays, err = getPositiveInt(getenv, "RATE_EVENT_RETENTION_DAYS", defaultRateEventRetentionDays); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
@@ -212,55 +218,4 @@ func getMinutes(getenv getenvFunc, key string, fallback int) (time.Duration, err
 	return time.Duration(value) * time.Minute, nil
 }
 
-func loadDotEnv(path string) (map[string]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("load %s: %w", path, err)
-	}
-	defer file.Close()
 
-	values := make(map[string]string)
-	scanner := bufio.NewScanner(file)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNo)
-		}
-		key = strings.TrimSpace(key)
-		if key == "" {
-			return nil, fmt.Errorf("%s:%d: empty key", path, lineNo)
-		}
-		rawValue := strings.TrimSpace(value)
-		quoted := len(rawValue) >= 2 && (rawValue[0] == '"' || rawValue[0] == '\'')
-		values[key] = parseDotEnvValue(rawValue, quoted)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	return values, nil
-}
-
-func parseDotEnvValue(value string, quoted bool) string {
-	if len(value) >= 2 {
-		quote := value[0]
-		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
-			return value[1 : len(value)-1]
-		}
-	}
-	if !quoted {
-		if idx := strings.Index(value, " #"); idx >= 0 {
-			value = value[:idx]
-		}
-	}
-	return strings.TrimSpace(value)
-}
