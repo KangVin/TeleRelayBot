@@ -55,3 +55,12 @@ func (s *Sender) CopyUser(ctx context.Context, userID int64, msg tele.Editable, 
 	}
 	return s.bot.Copy(&tele.User{ID: userID}, msg, opts...)
 }
+
+func (s *Sender) SendRichOwner(ctx context.Context, ownerID int64, markdown string) (*tele.Message, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := s.limiter.Wait(waitCtx); err != nil {
+		return nil, err
+	}
+	return s.bot.Send(&tele.User{ID: ownerID}, &tele.InputRichMessage{Markdown: markdown})
+}

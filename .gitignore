@@ -5,7 +5,6 @@
 
 # Build outputs
 /telegram-relay-bot
-/TeleDMBot
 *.exe
 *.test
 *.out

@@ -110,7 +110,7 @@ func (h *Handler) handleCallbackUser(c tele.Context) error {
 	if err := c.Respond(); err != nil {
 		return err
 	}
-	return c.Send(formatDomainUserInfo(user), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: formatDomainUserInfo(user)})
 }
 
 func (h *Handler) handleCallbackMute(c tele.Context) error {

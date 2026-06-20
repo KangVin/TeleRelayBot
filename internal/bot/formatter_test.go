@@ -20,13 +20,13 @@ func TestFormatOwnerMessage(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"*New message*",
-		"ID: `123456789`",
-		"Username: @example",
-		"Name: Alice Smith",
-		"Language: zh-hans",
-		"Sent At: 2026-05-11 12:00:00 UTC",
-		"*Message:*\nhello owner",
+		"# New message",
+		"`123456789`",
+		"@example",
+		"Alice Smith",
+		"zh-hans",
+		"2026-05-11 12:00:00 UTC",
+		"**Message:**\n\nhello owner",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatted owner message missing %q:\n%s", want, got)
@@ -53,19 +53,21 @@ func TestFormatUserInfo(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"*User Info*",
-		"ID: `123456789`",
-		"Username: @example",
-		"Name: Alice Smith",
-		"Language: zh-hans",
-		"Status: blocked",
-		"Messages: 12",
-		"Limited Count: 2",
-		"Created At: 2026-05-11 10:00:00 UTC",
-		"Updated At: 2026-05-11 11:00:00 UTC",
-		"Last Seen At: 2026-05-11 12:00:00 UTC",
-		"Ban Reason: spam",
-		"Banned Until: 2026-05-12 12:00:00 UTC",
+		"# User Info",
+		"`123456789`",
+		"@example",
+		"Alice Smith",
+		"zh-hans",
+		"blocked",
+		"Messages",
+		"12",
+		"Limited Count",
+		"2",
+		"2026-05-11 10:00:00 UTC",
+		"2026-05-11 11:00:00 UTC",
+		"2026-05-11 12:00:00 UTC",
+		"spam",
+		"2026-05-12 12:00:00 UTC",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatted user info missing %q:\n%s", want, got)
@@ -85,14 +87,21 @@ func TestFormatStats(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Stats",
-		"Total Users: 10",
-		"Normal Users: 7",
-		"Muted Users: 2",
-		"Blocked Users: 1",
-		"Today Messages: 30",
-		"Today Limited: 4",
-		"Today Replies: 5",
+		"# Stats",
+		"Total Users",
+		"10",
+		"Normal Users",
+		"7",
+		"Muted Users",
+		"2",
+		"Blocked Users",
+		"1",
+		"Today Messages",
+		"30",
+		"Today Limited",
+		"4",
+		"Today Replies",
+		"5",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatted stats missing %q:\n%s", want, got)
@@ -109,7 +118,7 @@ func TestFormatOwnerMediaMessage(t *testing.T) {
 	}
 
 	got := FormatOwnerMediaMessage(user, 44, "photo", "caption text")
-	for _, want := range []string{"*New media message*", "ID: `123`", "Type: photo", "caption text", "Media copy follows"} {
+	for _, want := range []string{"# New media message", "`123`", "photo", "caption text", "Media copy follows"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("FormatOwnerMediaMessage() missing %q in:\n%s", want, got)
 		}

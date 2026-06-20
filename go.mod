@@ -4,7 +4,7 @@ go 1.24.5
 
 require (
 	golang.org/x/time v0.11.0
-	gopkg.in/telebot.v4 v4.0.0-beta.8
+	gopkg.in/telebot.v4 v4.0.0-beta.10
 	modernc.org/sqlite v1.36.3
 )
 

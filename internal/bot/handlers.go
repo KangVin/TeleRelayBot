@@ -102,14 +102,14 @@ func (h *Handler) registerCommands() {
 
 func (h *Handler) handleStart(c tele.Context) error {
 	if h.isOwner(c) {
-		return c.Send(ownerHelpText(), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		return c.Send(&tele.InputRichMessage{Markdown: ownerHelpText()})
 	}
 	return c.Send("Hello. Send a private message here and I will relay it to the owner. Please avoid sending too frequently.")
 }
 
 func (h *Handler) handleHelp(c tele.Context) error {
 	if h.isOwner(c) {
-		return c.Send(ownerHelpText(), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		return c.Send(&tele.InputRichMessage{Markdown: ownerHelpText()})
 	}
 	return c.Send("Send a text message in this private chat. The owner can reply through the bot.")
 }
@@ -187,7 +187,7 @@ func (h *Handler) handleStrangerText(c tele.Context) error {
 		Text:         c.Text(),
 		SentAt:       time.Now().UTC(),
 	})
-	sent, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	sent, err := h.sender.SendRichOwner(ctx, h.cfg.OwnerID, ownerText)
 	if err != nil {
 		h.logWith(ctx).Error("forward to owner", slog.Any("error", err))
 		return c.Send("Message volume is high. Please try again later.")
@@ -379,7 +379,7 @@ func (h *Handler) handleStrangerMedia(c tele.Context) error {
 	}
 
 	ownerText := FormatOwnerMediaMessage(dbUser, msg.ID, media.Type, media.Caption)
-	meta, err := h.sender.SendOwner(ctx, h.cfg.OwnerID, ownerText, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	meta, err := h.sender.SendRichOwner(ctx, h.cfg.OwnerID, ownerText)
 	if err != nil {
 		h.logWith(ctx).Error("send media metadata", slog.Any("error", err))
 		return c.Send("Message volume is high. Please try again later.")
@@ -628,7 +628,7 @@ func (h *Handler) handleUserCommand(c tele.Context) error {
 	if err != nil {
 		return c.Send("User not found.")
 	}
-	return c.Send(formatDomainUserInfo(user), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: formatDomainUserInfo(user)})
 }
 
 func (h *Handler) handleStats(c tele.Context) error {
@@ -639,7 +639,7 @@ func (h *Handler) handleStats(c tele.Context) error {
 		h.logWith(ctx).Error("stats", slog.Any("error", err))
 		return c.Send("Stats unavailable.")
 	}
-	return c.Send(formatDomainStats(stats), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: formatDomainStats(stats)})
 }
 
 func (h *Handler) handleRecent(c tele.Context) error {
@@ -657,7 +657,7 @@ func (h *Handler) handleRecent(c tele.Context) error {
 	if err != nil {
 		return c.Send("Recent users unavailable.")
 	}
-	return c.Send(FormatUserList("Recent users", users), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: FormatUserList("Recent users", users)})
 }
 
 func (h *Handler) handleBlocklist(c tele.Context) error {
@@ -667,7 +667,7 @@ func (h *Handler) handleBlocklist(c tele.Context) error {
 	if err != nil {
 		return c.Send("Blocklist unavailable.")
 	}
-	return c.Send(FormatUserList("Blocked users", users), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: FormatUserList("Blocked users", users)})
 }
 
 func (h *Handler) handleAudit(c tele.Context) error {
@@ -685,12 +685,12 @@ func (h *Handler) handleAudit(c tele.Context) error {
 	if err != nil {
 		return c.Send("Audit logs unavailable.")
 	}
-	return c.Send(FormatAuditLogs(logs), &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+	return c.Send(&tele.InputRichMessage{Markdown: FormatAuditLogs(logs)})
 }
 
 func ownerHelpText() string {
 	return strings.Join([]string{
-		"*Owner panel*",
+		"**Owner panel**",
 		"",
 		"`/stats`",
 		"`/recent [limit]`",

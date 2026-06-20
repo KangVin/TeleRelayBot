@@ -61,8 +61,11 @@ func (m *mockContext) Respond(opts ...*tele.CallbackResponse) error {
 	return nil
 }
 func (m *mockContext) Send(what interface{}, opts ...interface{}) error {
-	if text, ok := what.(string); ok {
-		m.response = text
+	switch v := what.(type) {
+	case string:
+		m.response = v
+	case *tele.InputRichMessage:
+		m.response = v.Markdown
 	}
 	return nil
 }
@@ -109,16 +112,13 @@ func (m *mockContext) AnswerShippingQuery(ok bool, opts ...interface{}) error { 
 func (m *mockContext) AnswerPreCheckoutQuery(ok bool, errorMessage string) error { return nil }
 func (m *mockContext) AnswerWebApp(query string, result interface{}) error { return nil }
 func (m *mockContext) Accept(errorMessage ...string) error { return nil }
+func (m *mockContext) AnswerGuest(result tele.Result) error   { return nil }
 func (m *mockContext) Redirect(to tele.Context) error  { return nil }
 func (m *mockContext) Copy(to tele.Recipient, opts ...interface{}) (*tele.Message, error) {
 	return &tele.Message{ID: 999}, nil
 }
 func (m *mockContext) CopyEditable(what tele.Editable, opts ...interface{}) (*tele.Message, error) {
 	return &tele.Message{ID: 999}, nil
-}
-
-func (m *mockContext) reset() {
-	m.response = ""
 }
 
 var _ tele.Context = (*mockContext)(nil)
